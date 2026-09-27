@@ -9,16 +9,17 @@ import { renderBlogSnapshot } from '@/lib/render/blog';
 import { invalidateRelatedPosts } from '@/lib/blog-content/related-index';
 import { deliveryEventType, notifySiteWebhook } from '@/lib/webhook';
 import { assertBlogAuthorIsUsable } from '@/lib/admin/blog-author';
-import { createBlogRevision } from '@/lib/blog-revisions';
+import { createBlogRevision, ensureBlogRevisionBaseline } from '@/lib/blog-revisions';
 
 export const dynamic = 'force-dynamic';
 type Params = { slug: string };
 
-export const GET = withAdmin<Params>(async (_req, { params, site }) => {
+export const GET = withAdmin<Params>(async (_req, { params, user, site }) => {
   const { slug } = await params;
   await connectToDatabase();
   const blog = await Blog.findOne({ slug, siteId: site.id }).exec();
   if (!blog) throw notFound('Blog');
+   await ensureBlogRevisionBaseline(blog, user.id);
   return NextResponse.json(blog);
 });
 

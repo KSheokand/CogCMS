@@ -28,6 +28,8 @@ describe('every /api/admin route rejects anonymous requests', () => {
       './api-keys/[id]/route.ts',
       './authors/[slug]/route.ts',
       './authors/route.ts',
+      './blogs/[slug]/revisions/[version]/restore/route.ts',
+      './blogs/[slug]/revisions/route.ts',
       './blogs/[slug]/route.ts',
       './blogs/route.ts',
       './faq-submissions/[id]/route.ts',

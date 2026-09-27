@@ -50,10 +50,7 @@ function buildBlogRevisionSnapshot(blog: IBlog): IBlogRevisionSnapshot {
   };
 }
 
-function snapshotsEqual(
-  left: IBlogRevisionSnapshot,
-  right: IBlogRevisionSnapshot,
-): boolean {
+function snapshotsEqual(left: IBlogRevisionSnapshot, right: IBlogRevisionSnapshot): boolean {
   const normalize = (snapshot: IBlogRevisionSnapshot) => ({
     ...snapshot,
     rendered: {
@@ -63,6 +60,20 @@ function snapshotsEqual(
   });
 
   return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
+}
+
+async function persistBlogRevision(
+  blog: IBlog,
+  createdBy: RevisionActor,
+  version: number,
+): Promise<IBlogRevision> {
+  return BlogRevision.create({
+    blogId: blog._id,
+    siteId: blog.siteId,
+    version,
+    snapshot: buildBlogRevisionSnapshot(blog),
+    createdBy: createdBy ? new Types.ObjectId(createdBy) : null,
+  });
 }
 
 export async function createBlogRevision(
@@ -89,12 +100,57 @@ export async function createBlogRevision(
   }
 
   const nextVersion = (latest?.version ?? 0) + 1;
+  const revision = await persistBlogRevision(blog, createdBy, nextVersion);
+
+  return {
+    revision,
+    created: true,
+  };
+}
+
+export async function createBlogRevisionSnapshot(
+  blog: IBlog,
+  createdBy: RevisionActor,
+): Promise<IBlogRevision> {
+  const latest = await BlogRevision.findOne({
+    blogId: blog._id,
+    siteId: blog.siteId,
+  })
+    .sort({ version: -1 })
+    .exec();
+
+  const nextVersion = (latest?.version ?? 0) + 1;
+
+  return persistBlogRevision(blog, createdBy, nextVersion);
+}
+
+export async function ensureBlogRevisionBaseline(
+  blog: IBlog,
+  createdBy: RevisionActor,
+): Promise<{
+  revision: IBlogRevision | null;
+  created: boolean;
+}> {
+  const existing = await BlogRevision.findOne({
+    blogId: blog._id,
+    siteId: blog.siteId,
+  })
+    .select({ _id: 1 })
+    .lean()
+    .exec();
+
+  if (existing) {
+    return {
+      revision: null,
+      created: false,
+    };
+  }
 
   const revision = await BlogRevision.create({
     blogId: blog._id,
     siteId: blog.siteId,
-    version: nextVersion,
-    snapshot,
+    version: 1,
+    snapshot: buildBlogRevisionSnapshot(blog),
     createdBy: createdBy ? new Types.ObjectId(createdBy) : null,
   });
 

@@ -13,7 +13,11 @@ vi.mock('@/models/BlogRevision', () => ({
   },
 }));
 
-import { createBlogRevision } from '@/lib/blog-revisions';
+import {
+  createBlogRevision,
+  createBlogRevisionSnapshot,
+  ensureBlogRevisionBaseline,
+} from '@/lib/blog-revisions';
 
 const blogId = new Types.ObjectId();
 const siteId = new Types.ObjectId();
@@ -165,43 +169,84 @@ describe('createBlogRevision', () => {
   });
 
   it('ignores renderedAt changes when checking for duplicate revisions', async () => {
-  const blog = makeBlog();
+    const blog = makeBlog();
 
-  mockLatestRevision({
-    version: 2,
-    snapshot: {
-      title: blog.title,
-      slug: blog.slug,
-      excerpt: blog.excerpt,
-      content: blog.content,
-      imageUrl: blog.imageUrl,
-      tag: blog.tag,
-      authorId: blog.authorId,
-      category: blog.category,
-      tags: [...blog.tags],
-      faqs: [...blog.faqs],
-      keyTakeaways: [...blog.keyTakeaways],
-      relatedSlugs: [...blog.relatedSlugs],
-      tocOverrides: [...blog.tocOverrides],
-      status: blog.status,
-      publishedAt: blog.publishedAt,
-      metaTitle: blog.metaTitle,
-      metaDescription: blog.metaDescription,
-      keywords: blog.keywords,
-      isFeatured: blog.isFeatured,
-      rendered: {
-        ...blog.rendered,
-        renderedAt: new Date('2026-09-27T11:00:00.000Z'),
+    mockLatestRevision({
+      version: 2,
+      snapshot: {
+        title: blog.title,
+        slug: blog.slug,
+        excerpt: blog.excerpt,
+        content: blog.content,
+        imageUrl: blog.imageUrl,
+        tag: blog.tag,
+        authorId: blog.authorId,
+        category: blog.category,
+        tags: [...blog.tags],
+        faqs: [...blog.faqs],
+        keyTakeaways: [...blog.keyTakeaways],
+        relatedSlugs: [...blog.relatedSlugs],
+        tocOverrides: [...blog.tocOverrides],
+        status: blog.status,
+        publishedAt: blog.publishedAt,
+        metaTitle: blog.metaTitle,
+        metaDescription: blog.metaDescription,
+        keywords: blog.keywords,
+        isFeatured: blog.isFeatured,
+        rendered: {
+          ...blog.rendered,
+          renderedAt: new Date('2026-09-27T11:00:00.000Z'),
+        },
       },
-    },
+    });
+
+    const result = await createBlogRevision(blog as any, userId);
+
+    expect(result.created).toBe(false);
+    expect(result.revision).toBeNull();
+    expect(create).not.toHaveBeenCalled();
   });
 
-  const result = await createBlogRevision(blog as any, userId);
+  it('creates a new revision snapshot with the next version', async () => {
+    const blog = makeBlog();
 
-  expect(result.created).toBe(false);
-  expect(result.revision).toBeNull();
-  expect(create).not.toHaveBeenCalled();
-});
+    mockLatestRevision({
+      version: 3,
+    });
+
+    const revision = {
+      _id: new Types.ObjectId(),
+      blogId: blog._id,
+      siteId: blog.siteId,
+      version: 4,
+    };
+
+    create.mockResolvedValue(revision);
+
+    const result = await createBlogRevisionSnapshot(blog as any, userId);
+
+    expect(result).toBe(revision);
+
+    expect(findOne).toHaveBeenCalledWith({
+      blogId,
+      siteId,
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        blogId,
+        siteId,
+        version: 4,
+        createdBy: userId,
+        snapshot: expect.objectContaining({
+          title: 'Test Blog',
+          slug: 'test-blog',
+          content: '<p>Hello world</p>',
+          status: 'draft',
+        }),
+      }),
+    );
+  });
 
   it('creates a new revision when the blog changes', async () => {
     const blog = makeBlog();
@@ -237,20 +282,81 @@ describe('createBlogRevision', () => {
       version: 3,
     });
 
-    const result = await createBlogRevision(
-      makeBlog({ title: 'New title' }) as any,
-      userId,
-    );
+    const result = await createBlogRevision(blog as any, userId);
 
     expect(result.created).toBe(true);
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         version: 3,
         snapshot: expect.objectContaining({
-          title: 'New title',
+          title: 'Test Blog',
         }),
       }),
     );
+  });
+
+  it('creates a version 1 baseline when no revision exists', async () => {
+    const blog = makeBlog();
+
+    findOne.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        lean: vi.fn().mockReturnValue({
+          exec: vi.fn().mockResolvedValue(null),
+        }),
+      }),
+    });
+
+    const revision = {
+      _id: new Types.ObjectId(),
+      blogId: blog._id,
+      siteId: blog.siteId,
+      version: 1,
+    };
+
+    create.mockResolvedValue(revision);
+
+    const result = await ensureBlogRevisionBaseline(blog as any, userId);
+
+    expect(result.created).toBe(true);
+    expect(result.revision).toBe(revision);
+
+    expect(findOne).toHaveBeenCalledWith({
+      blogId,
+      siteId,
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        blogId,
+        siteId,
+        version: 1,
+        createdBy: userId,
+        snapshot: expect.objectContaining({
+          title: 'Test Blog',
+          content: '<p>Hello world</p>',
+        }),
+      }),
+    );
+  });
+
+  it('does not create another baseline when a revision already exists', async () => {
+    const blog = makeBlog();
+
+    findOne.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        lean: vi.fn().mockReturnValue({
+          exec: vi.fn().mockResolvedValue({
+            _id: new Types.ObjectId(),
+          }),
+        }),
+      }),
+    });
+
+    const result = await ensureBlogRevisionBaseline(blog as any, userId);
+
+    expect(result.created).toBe(false);
+    expect(result.revision).toBeNull();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('keeps revisions scoped to the current site', async () => {

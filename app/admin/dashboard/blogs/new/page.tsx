@@ -437,6 +437,143 @@ function ShortcutsPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
+type BlogRevisionListItem = {
+  _id: string;
+  version: number;
+  createdAt: string;
+  snapshot: {
+    title: string;
+    status: 'draft' | 'publish';
+    content: string;
+  };
+};
+
+type BlogRevisionPreview = Pick<BlogRevisionListItem, 'version' | 'createdAt' | 'snapshot'>;
+
+// ── Version history panel ───────────────────────
+function VersionHistoryPanel({
+  revisions,
+  loading,
+  error,
+  onClose,
+  onView,
+  onRestore,
+  restoringVersion,
+}: {
+  revisions: BlogRevisionListItem[];
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+  onView: (revision: BlogRevisionPreview) => void;
+  onRestore: (version: number) => void;
+  restoringVersion: number | null;
+}) {
+  return (
+    <div className="fixed inset-0 z-[100] bg-black/20" onClick={onClose}>
+      <div
+        className="absolute right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl border-l border-gray-100 flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
+          <div>
+            <h2 className="text-lg text-gray-900" style={{ fontWeight: 600 }}>
+              Version history
+            </h2>
+            <p className="text-xs text-gray-400 mt-1">Saved versions of this blog</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-50 transition-colors"
+            title="Close version history"
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {loading && <div className="text-sm text-gray-400">Loading version history...</div>}
+
+          {!loading && error && (
+            <div className="p-4 rounded-xl bg-red-50 border border-red-100 text-sm text-red-600">
+              {error}
+            </div>
+          )}
+
+          {!loading && !error && revisions.length === 0 && (
+            <div className="text-sm text-gray-400">No saved versions yet.</div>
+          )}
+
+          {!loading && !error && revisions.length > 0 && (
+            <div className="flex flex-col gap-3">
+              {revisions.map((revision, index) => (
+                <div
+                  key={revision._id}
+                  className="rounded-xl border border-gray-100 p-4 hover:border-gray-200 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm text-gray-900" style={{ fontWeight: 600 }}>
+                        Version {revision.version}
+                      </div>
+
+                      <div className="text-xs text-gray-400 mt-1">
+                        {new Date(revision.createdAt).toLocaleString()}
+                      </div>
+                    </div>
+
+                    <span
+                      className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded-full ${
+                        revision.snapshot.status === 'publish'
+                          ? 'bg-green-50 text-green-600'
+                          : 'bg-gray-100 text-gray-500'
+                      }`}
+                    >
+                      {revision.snapshot.status === 'publish' ? 'Published' : 'Draft'}
+                    </span>
+                  </div>
+
+                  <div className="mt-3">
+                    <div className="text-sm text-gray-700 line-clamp-2">
+                      {revision.snapshot.title || 'Untitled'}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onView(revision)}
+                      className="px-3 py-1.5 text-xs text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      View
+                    </button>
+
+                    {index !== 0 && (
+                      <button
+                        type="button"
+                        onClick={() => onRestore(revision.version)}
+                        disabled={restoringVersion !== null}
+                        className="px-3 py-1.5 text-xs text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {restoringVersion === revision.version ? 'Restoring...' : 'Restore'}
+                      </button>
+                    )}
+
+                    {index === 0 && <span className="text-[11px] text-gray-400">Latest</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main editor form ────────────────────────────
 function EditorForm() {
   const site = useSite();
@@ -446,6 +583,13 @@ function EditorForm() {
 
   const [loadingData, setLoadingData] = useState(!!editSlug);
   const [originalSlug, setOriginalSlug] = useState<string | null>(null);
+
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [revisions, setRevisions] = useState<BlogRevisionListItem[]>([]);
+  const [loadingRevisions, setLoadingRevisions] = useState(false);
+  const [revisionError, setRevisionError] = useState<string | null>(null);
+  const [restoringVersion, setRestoringVersion] = useState<number | null>(null);
+  const [selectedRevision, setSelectedRevision] = useState<BlogRevisionPreview | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -540,6 +684,87 @@ function EditorForm() {
       .finally(() => setLoadingData(false));
   }, [editSlug]);
 
+  const loadRevisionHistory = useCallback(async () => {
+    if (!editSlug) return;
+
+    setLoadingRevisions(true);
+    setRevisionError(null);
+
+    try {
+      const response = await fetch(`/api/admin/blogs/${encodeURIComponent(editSlug)}/revisions`, {
+        cache: 'no-store',
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to load revision history.');
+      }
+
+      setRevisions(data);
+    } catch (error) {
+      setRevisionError(error instanceof Error ? error.message : 'Failed to load revision history.');
+    } finally {
+      setLoadingRevisions(false);
+    }
+  }, [editSlug]);
+
+  const handleRestoreRevision = useCallback(
+    async (version: number) => {
+      const confirmed = window.confirm(
+        `Restore version ${version}? This will replace the current blog content and create a new version in the history.`,
+      );
+
+      if (!confirmed || !editSlug) return;
+
+      setRestoringVersion(version);
+      setRevisionError(null);
+
+      try {
+        const response = await fetch(
+          `/api/admin/blogs/${encodeURIComponent(editSlug)}/revisions/${version}/restore`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({}),
+          },
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to restore the revision.');
+        }
+
+        setShowVersionHistory(false);
+        setSelectedRevision(null);
+
+        const restoredSlug = data.blog?.slug;
+
+        if (restoredSlug && restoredSlug !== editSlug) {
+          router.push(`/admin/dashboard/blogs/new?slug=${encodeURIComponent(restoredSlug)}`);
+        } else {
+          window.location.reload();
+        }
+      } catch (error) {
+        setRevisionError(
+          error instanceof Error ? error.message : 'Failed to restore the revision.',
+        );
+      } finally {
+        setRestoringVersion(null);
+      }
+    },
+    [editSlug, router],
+  );
+
+  useEffect(() => {
+    if (showVersionHistory) {
+      void loadRevisionHistory();
+    }
+  }, [showVersionHistory, loadRevisionHistory]);
+
   useEffect(() => {
     if (!editSlug) {
       initialSnapshotRef.current = JSON.stringify({
@@ -628,23 +853,26 @@ function EditorForm() {
     setIsDragging(false);
   }, []);
 
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith('image/')) {
-      try {
-        setLoading(true);
-        setError(null);
-        const imageUrl = await uploadImageFile(file, site?.id);
-        setFormData((prev) => ({ ...prev, imageUrl }));
-      } catch (err: any) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
+  const handleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) {
+        try {
+          setLoading(true);
+          setError(null);
+          const imageUrl = await uploadImageFile(file, site?.id);
+          setFormData((prev) => ({ ...prev, imageUrl }));
+        } catch (err: any) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
       }
-    }
-  }, [site?.id]);
+    },
+    [site?.id],
+  );
 
   // ── Insert actions — use Quill API at cursor ───
   const handleInsertImage = () => {
@@ -789,6 +1017,18 @@ function EditorForm() {
     document.addEventListener('click', onClick);
     return () => document.removeEventListener('click', onClick);
   }, []);
+
+  const handleViewRevision = (revision: {
+    version: number;
+    createdAt: string;
+    snapshot: {
+      title: string;
+      status: 'draft' | 'publish';
+      content: string;
+    };
+  }) => {
+    setSelectedRevision(revision);
+  };
 
   // ── Submit ────────────────────────────────────
   const handleSubmit = async (action: 'draft' | 'publish') => {
@@ -1033,6 +1273,18 @@ function EditorForm() {
               <line x1="18" y1="10" x2="18" y2="10" />
               <line x1="8" y1="14" x2="16" y2="14" />
             </svg>
+          </button>
+
+          {/* Version history button */}
+          <button
+            type="button"
+            onClick={() => setShowVersionHistory(true)}
+            disabled={!editSlug}
+            className="px-3 py-2 text-[13px] text-gray-600 hover:bg-gray-50 border rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ fontWeight: 500, borderColor: 'rgba(0,0,0,0.12)' }}
+            title={editSlug ? 'View version history' : 'Save the blog before viewing history'}
+          >
+            Version history
           </button>
 
           <button
@@ -1601,6 +1853,69 @@ function EditorForm() {
 
       {/* ── Keyboard shortcuts modal ───────────── */}
       {showShortcuts && <ShortcutsPanel onClose={() => setShowShortcuts(false)} />}
+      {/* ── Version history panel ───────────────── */}
+      {showVersionHistory && (
+        <VersionHistoryPanel
+          revisions={revisions}
+          loading={loadingRevisions}
+          error={revisionError}
+          onClose={() => setShowVersionHistory(false)}
+          onView={handleViewRevision}
+          onRestore={handleRestoreRevision}
+          restoringVersion={restoringVersion}
+        />
+      )}
+
+      {/* ── Revision preview ────────────────────── */}
+      {selectedRevision && (
+        <div
+          className="fixed inset-0 z-[110] bg-black/30 flex items-center justify-center p-6"
+          onClick={() => setSelectedRevision(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
+              <div>
+                <h2 className="text-lg text-gray-900" style={{ fontWeight: 600 }}>
+                  Version {selectedRevision.version}
+                </h2>
+
+                <p className="text-xs text-gray-400 mt-1">
+                  {new Date(selectedRevision.createdAt).toLocaleString()}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedRevision(null)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-50"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="overflow-y-auto max-h-[calc(85vh-90px)] p-6">
+              <h1 className="text-3xl text-gray-900 mb-3" style={{ fontWeight: 600 }}>
+                {selectedRevision.snapshot.title}
+              </h1>
+
+              <div className="text-xs text-gray-400 mb-6">
+                {selectedRevision.snapshot.status === 'publish' ? 'Published' : 'Draft'}
+              </div>
+
+              <div
+                className="prose max-w-none text-gray-700"
+                dangerouslySetInnerHTML={{
+                  __html: selectedRevision.snapshot.content,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {graphicModal && (
         <GraphicEditorModal
           initial={graphicModal.config}
